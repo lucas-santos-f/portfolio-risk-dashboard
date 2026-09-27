@@ -4,7 +4,7 @@
 
 ![Portfolio Risk Dashboard](docs/screenshot.png)
 
-[![tests](https://github.com/Lucas123124124123123/portfolio-risk-dashboard/actions/workflows/tests.yml/badge.svg)](https://github.com/Lucas123124124123123/portfolio-risk-dashboard/actions/workflows/tests.yml)
+[![tests](https://github.com/lucas-santos-f/portfolio-risk-dashboard/actions/workflows/tests.yml/badge.svg)](https://github.com/lucas-santos-f/portfolio-risk-dashboard/actions/workflows/tests.yml)
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
@@ -34,7 +34,7 @@ Every technical term in the app carries a one-line explanation.
 ## Quick start
 
 ```bash
-git clone https://github.com/Lucas123124124123123/portfolio-risk-dashboard.git
+git clone https://github.com/lucas-santos-f/portfolio-risk-dashboard.git
 cd portfolio-risk-dashboard
 pip install -r requirements.txt
 streamlit run app.py
