@@ -1,7 +1,3 @@
-"""Streamlit front end: how risky is this portfolio, really?"""
-
-from __future__ import annotations
-
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -19,6 +15,7 @@ from portfolio_risk.risk import (
     rolling_volatility,
 )
 
+# palette is the same as .streamlit/config.toml, keep them in sync by hand
 PORTFOLIO, MARKET, WEIGHT = "#2a78d6", "#898781", "#cdccc5"
 DIVERGING = [[0.0, "#256abf"], [0.5, "#f0efec"], [1.0, "#c4481d"]]
 SURFACE = "#fcfcfb"
@@ -28,7 +25,7 @@ BENCHMARK = "SPY"
 DEFAULT_WEIGHTS = {"VTI": 60.0, "AGG": 40.0}
 NEW_ASSET_WEIGHT = 10.0
 START_VALUE = 10_000
-DAYS_PER_MONTH = 30.44
+DAYS_PER_MONTH = 30.44  # 365.25 / 12
 
 st.set_page_config(page_title="Portfolio Risk Dashboard", layout="wide")
 
@@ -38,7 +35,7 @@ def get_prices() -> pd.DataFrame:
     return load_prices()
 
 
-def base_layout(fig: go.Figure, height: int) -> go.Figure:
+def base_layout(fig, height):
     fig.update_layout(
         height=height,
         margin=dict(l=8, r=8, t=8, b=8),
@@ -98,6 +95,7 @@ def contribution_chart(shares: pd.DataFrame) -> go.Figure:
         textposition="outside",
         hovertemplate="%{y}: %{x:.1f}% of the risk<extra></extra>",
     )
+    # leave room for the "27%" labels outside the bars, and for negative shares
     top = max(100.0, float(data[["weight", "risk_share"]].max().max() * 100)) * 1.12
     low = min(0.0, float(data["risk_share"].min() * 100)) * 1.2
     fig.update_layout(barmode="group", bargap=0.3)
@@ -133,12 +131,12 @@ def correlation_heatmap(corr: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def pct(value: float, digits: int = 1) -> str:
+def pct(value, digits=1):
     return f"{value * 100:.{digits}f}%"
 
 
-def gap(value: float) -> str:
-    """Difference of two percentages, in percentage points."""
+def gap(value):
+    # difference of two percentages -> percentage points, not %
     return f"{value * 100:+.1f} pts vs S&P 500"
 
 
@@ -202,6 +200,7 @@ if sum(amounts.values()) <= 0:
     st.stop()
 
 weights = normalize_weights(amounts)
+# dict.fromkeys dedupes while keeping order, SPY can be picked as an asset too
 returns = daily_returns(prices[list(dict.fromkeys([*weights.index, BENCHMARK]))])
 mine = portfolio_returns(returns, weights)
 market = returns[BENCHMARK]
