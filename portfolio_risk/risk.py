@@ -1,12 +1,6 @@
-"""Risk measures for a portfolio with fixed weights.
-
-Assumption used throughout: the portfolio is rebalanced back to its target
-weights every day, so its daily return is the weighted sum of the assets'
-daily returns. Returns are simple (not log) returns, as fractions
-(0.01 = 1%), and a year has 252 trading days.
-"""
-
-from __future__ import annotations
+# Everything here assumes the portfolio is rebalanced back to target weights
+# every day, so the portfolio return is just the weighted sum of asset returns.
+# Simple returns, not log. 0.01 == 1%.
 
 from dataclasses import dataclass
 
@@ -17,35 +11,33 @@ TRADING_DAYS = 252
 VAR_LEVEL = 0.95
 
 
-def date_of_min(series: pd.Series) -> pd.Timestamp:
+def date_of_min(series):
     return pd.Timestamp(series.index[int(series.to_numpy().argmin())])
 
 
 def normalize_weights(weights: dict[str, float]) -> pd.Series:
-    """Rescale amounts in any unit (dollars, %) to weights summing to 1, dropping zeros."""
-    series = pd.Series(weights, dtype=float)
-    series = series[series > 0]
-    if series.empty:
+    # the sidebar takes dollars or % interchangeably, so just rescale
+    w = pd.Series(weights, dtype=float)
+    w = w[w > 0]
+    if w.empty:
         raise ValueError("At least one weight must be positive")
-    return series / series.sum()
+    return w / w.sum()
 
 
 def daily_returns(prices: pd.DataFrame) -> pd.DataFrame:
-    """Daily returns over the period where every column has a price."""
+    # dropna first: META only starts in 2012, the window shrinks to fit
     return prices.dropna().pct_change().dropna()
 
 
-def portfolio_returns(returns: pd.DataFrame, weights: pd.Series) -> pd.Series:
+def portfolio_returns(returns, weights):
     return (returns[weights.index] * weights).sum(axis=1).rename("portfolio")
 
 
 def growth(returns: pd.Series) -> pd.Series:
-    """Value of 1 invested at the start, after each day."""
     return (1 + returns).cumprod()
 
 
 def annualized_return(returns: pd.Series) -> float:
-    """Compound annual growth rate."""
     years = len(returns) / TRADING_DAYS
     return float(growth(returns).iloc[-1] ** (1 / years) - 1)
 
@@ -55,84 +47,74 @@ def annualized_volatility(returns: pd.Series) -> float:
 
 
 def sharpe_ratio(returns: pd.Series, risk_free_rate: float = 0.0) -> float:
-    """Average yearly return above the risk-free rate per unit of volatility.
-
-    Uses the arithmetic mean of daily excess returns, the textbook
-    definition, so it is not exactly (CAGR - rate) / volatility.
-    """
-    daily_rate = (1 + risk_free_rate) ** (1 / TRADING_DAYS) - 1
-    excess = returns - daily_rate
-    return float(excess.mean() / returns.std() * np.sqrt(TRADING_DAYS))
+    # textbook version (mean of daily excess returns), so it won't match
+    # (CAGR - rf) / vol exactly. People ask about this, it's expected.
+    daily_rf = (1 + risk_free_rate) ** (1 / TRADING_DAYS) - 1
+    return float((returns - daily_rf).mean() / returns.std() * np.sqrt(TRADING_DAYS))
 
 
 def drawdown(returns: pd.Series) -> pd.Series:
-    """Loss from the highest value reached so far, at each day (0 at a new high)."""
     wealth = growth(returns)
+    # clip at 1 so a fall on day one is measured from the money you put in,
+    # not from the (already lower) first close
     return wealth / wealth.cummax().clip(lower=1) - 1
 
 
 @dataclass
 class MaxDrawdown:
-    depth: float  # worst peak-to-bottom loss, negative fraction
-    peak: pd.Timestamp  # last high before the fall
+    depth: float  # negative
+    peak: pd.Timestamp
     bottom: pd.Timestamp
-    recovered: pd.Timestamp | None  # first day back at the old high, None if not yet
+    recovered: pd.Timestamp | None  # None = still underwater
 
     @property
-    def days_to_recover(self) -> int | None:
-        return None if self.recovered is None else (self.recovered - self.peak).days
+    def days_to_recover(self):
+        if self.recovered is None:
+            return None
+        return (self.recovered - self.peak).days
 
 
 def max_drawdown(returns: pd.Series) -> MaxDrawdown:
+    """Worst peak-to-bottom fall, with the dates and the recovery (if any)."""
     dd = drawdown(returns)
     bottom = date_of_min(dd)
+
     before = dd.loc[:bottom]
-    at_high = before[before == 0]
-    # Falling from day one means the peak is the starting value.
-    peak = pd.Timestamp(at_high.index[-1] if len(at_high) else dd.index[0])
+    highs = before[before == 0]
+    peak = pd.Timestamp(highs.index[-1] if len(highs) else dd.index[0])
+
     after = dd.loc[bottom:]
     back = after[after == 0]
-    return MaxDrawdown(
-        depth=float(dd.loc[bottom]),
-        peak=peak,
-        bottom=bottom,
-        recovered=pd.Timestamp(back.index[0]) if len(back) else None,
-    )
+    recovered = pd.Timestamp(back.index[0]) if len(back) else None
+
+    return MaxDrawdown(float(dd.loc[bottom]), peak, bottom, recovered)
 
 
 def beta(returns: pd.Series, market: pd.Series) -> float:
-    """Sensitivity to the market: 1.5 means it moved 1.5% for every 1% of the market."""
-    aligned = pd.concat([returns, market], axis=1, join="inner").to_numpy()
-    cov = np.cov(aligned, rowvar=False)
+    both = pd.concat([returns, market], axis=1, join="inner").to_numpy()
+    cov = np.cov(both, rowvar=False)
     return float(cov[0, 1] / cov[1, 1])
 
 
-def rolling_volatility(returns: pd.Series, window: int = TRADING_DAYS) -> pd.Series:
-    """Annualized volatility over the trailing ``window`` days."""
-    volatility: pd.Series = returns.rolling(window).std() * np.sqrt(TRADING_DAYS)
-    return volatility.dropna()
+def rolling_volatility(returns, window=TRADING_DAYS):
+    vol = returns.rolling(window).std() * np.sqrt(TRADING_DAYS)
+    return vol.dropna()
 
 
 def risk_contribution(returns: pd.DataFrame, weights: pd.Series) -> pd.DataFrame:
-    """Share of the portfolio's volatility that comes from each asset.
-
-    contribution_i = w_i * (Cov @ w)_i / portfolio_variance. The shares add
-    up to 1. An asset can contribute more (or less) risk than its weight,
-    and a negative share means it reduces the portfolio's risk.
-    """
+    """Each asset's share of portfolio variance: w_i * (Cov @ w)_i / (w' Cov w). Sums to 1."""
     cov = returns[weights.index].cov() * TRADING_DAYS
     w = weights.to_numpy()
     marginal = cov.to_numpy() @ w
     variance = float(w @ marginal)
-    share = w * marginal / variance
-    return pd.DataFrame(
-        {
-            "weight": weights,
-            "risk_share": share,
-            "volatility": np.sqrt(np.diag(cov.to_numpy())),
-        },
-        index=weights.index,
-    )
+
+    # a negative share is legit (e.g. TLT next to stocks pre-2022), it means
+    # the asset is pulling total risk down
+    out = pd.DataFrame(index=weights.index)
+    out["weight"] = weights
+    out["risk_share"] = w * marginal / variance
+    out["volatility"] = np.sqrt(np.diag(cov.to_numpy()))
+    return out
 
 
 def monthly_returns(returns: pd.Series) -> pd.Series:
@@ -140,7 +122,7 @@ def monthly_returns(returns: pd.Series) -> pd.Series:
 
 
 def historical_var(returns: pd.Series, level: float = VAR_LEVEL) -> float:
-    """Daily loss exceeded on only (1 - level) of days, as a positive fraction."""
+    # returned as a positive number, 0.02 == "lost more than 2% on 5% of days"
     return float(-returns.quantile(1 - level))
 
 
@@ -161,6 +143,7 @@ class RiskReport:
 
 
 def risk_report(returns: pd.Series, market: pd.Series, risk_free_rate: float = 0.0) -> RiskReport:
+    """All the headline numbers the dashboard shows, for one return series."""
     months = monthly_returns(returns)
     worst_day = date_of_min(returns)
     worst_month = date_of_min(months)
